@@ -34,7 +34,7 @@ $script:Translations = @{
         titleLabel = "Drop a PDF, then click Convert"
         dropLabel = "Drag and drop one PDF file here"
         convertButton = "Convert to PDF/A"
-        toggleButton = "🇮🇹 IT / EN"
+        toggleButton = "IT"
         statusCheckingGhostscript = "Checking Ghostscript..."
         statusGhostscriptFound = "Ghostscript found: {0}"
         statusGhostscriptMissing = "Ghostscript not found. Install it, then relaunch this app."
@@ -56,7 +56,7 @@ $script:Translations = @{
         titleLabel = "Trascina un PDF, poi fai clic su Converti"
         dropLabel = "Trascina qui un file PDF"
         convertButton = "Converti in PDF/A"
-        toggleButton = "🇮🇹 IT / EN"
+        toggleButton = "IT / EN"
         statusCheckingGhostscript = "Controllo di Ghostscript in corso..."
         statusGhostscriptFound = "Ghostscript trovato: {0}"
         statusGhostscriptMissing = "Ghostscript non trovato. Installalo e riavvia l'app."
@@ -311,6 +311,41 @@ function Convert-ToPdfA {
         Background="#F4F7FB"
         FontFamily="Segoe UI"
         Title="QuickPDFA">
+    <Window.Resources>
+        <Style x:Key="RoundedPrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#1E6FD9" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="BorderBrush" Value="#1E6FD9" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.93" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.86" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Margin="18">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -327,6 +362,7 @@ function Convert-ToPdfA {
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="44" />
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="TitleText"
                        Grid.Column="0"
@@ -340,7 +376,31 @@ function Convert-ToPdfA {
                     Height="34"
                     HorizontalAlignment="Right"
                     FontSize="14"
-                    FontFamily="Segoe UI Emoji"
+                    Background="#FFFFFF"
+                    BorderBrush="#D4DCE8"
+                    Foreground="#0B1F3A"
+                    Cursor="Hand">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border Width="24" Height="16" BorderBrush="#AEBFD6" BorderThickness="1" Margin="0,0,8,0">
+                        <Canvas x:Name="LanguageFlagCanvas" Width="24" Height="16" />
+                    </Border>
+                    <TextBlock x:Name="LanguageToggleText"
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#0B1F3A" />
+                </StackPanel>
+            </Button>
+
+            <Button x:Name="InfoButton"
+                    Grid.Column="2"
+                    Width="34"
+                    Height="34"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Content="i"
                     Background="#FFFFFF"
                     BorderBrush="#D4DCE8"
                     Foreground="#0B1F3A"
@@ -387,6 +447,7 @@ function Convert-ToPdfA {
                     Height="42"
                     FontSize="15"
                     FontWeight="SemiBold"
+                    Style="{StaticResource RoundedPrimaryButton}"
                     Cursor="Hand"
                     Background="#1E6FD9"
                     Foreground="#FFFFFF"
@@ -409,11 +470,130 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 
 $titleText = $window.FindName("TitleText")
 $languageToggleButton = $window.FindName("LanguageToggleButton")
+$languageToggleText = $window.FindName("LanguageToggleText")
+$languageFlagCanvas = $window.FindName("LanguageFlagCanvas")
+$infoButton = $window.FindName("InfoButton")
 $dropZone = $window.FindName("DropZone")
 $dropText = $window.FindName("DropText")
 $inputBox = $window.FindName("InputBox")
 $convertButton = $window.FindName("ConvertButton")
 $statusText = $window.FindName("StatusText")
+
+function Show-InfoDialog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Window]$Owner
+    )
+
+    [xml]$infoXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="430"
+        Height="220"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        Background="#F7FAFE"
+        Title="QuickPDFA Info"
+        ShowInTaskbar="False">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="16" />
+            <RowDefinition Height="44" />
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="InfoText"
+                   FontSize="16"
+                   FontWeight="SemiBold"
+                   Foreground="#0B1F3A"
+                   TextWrapping="Wrap"
+                   VerticalAlignment="Center"
+                   Text="Happily vibe-coded by Matteo Tognolo" />
+
+        <Button x:Name="GitHubButton"
+                Grid.Row="2"
+                Width="170"
+                Height="40"
+                HorizontalAlignment="Left"
+                FontSize="14"
+                FontWeight="SemiBold"
+                Content="Open on GitHub"
+                Background="#1E6FD9"
+                Foreground="#FFFFFF"
+                BorderBrush="#1E6FD9"
+                Cursor="Hand" />
+    </Grid>
+</Window>
+"@
+
+    $dialogReader = New-Object System.Xml.XmlNodeReader $infoXaml
+    $dialogWindow = [Windows.Markup.XamlReader]::Load($dialogReader)
+    $dialogWindow.Owner = $Owner
+
+    $gitHubButton = $dialogWindow.FindName("GitHubButton")
+    $gitHubButton.Add_Click({
+        Start-Process -FilePath "https://github.com/tognols/quickpdfa.git" | Out-Null
+    })
+
+    [void]$dialogWindow.ShowDialog()
+}
+
+function Set-LanguageFlag {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("it", "en")]
+        [string]$FlagCode
+    )
+
+    $languageFlagCanvas.Children.Clear()
+
+    if ($FlagCode -eq "it") {
+        $left = New-Object System.Windows.Shapes.Rectangle
+        $left.Width = 8
+        $left.Height = 16
+        $left.Fill = [System.Windows.Media.Brushes]::ForestGreen
+        [System.Windows.Controls.Canvas]::SetLeft($left, 0)
+
+        $middle = New-Object System.Windows.Shapes.Rectangle
+        $middle.Width = 8
+        $middle.Height = 16
+        $middle.Fill = [System.Windows.Media.Brushes]::White
+        [System.Windows.Controls.Canvas]::SetLeft($middle, 8)
+
+        $right = New-Object System.Windows.Shapes.Rectangle
+        $right.Width = 8
+        $right.Height = 16
+        $right.Fill = [System.Windows.Media.Brushes]::Crimson
+        [System.Windows.Controls.Canvas]::SetLeft($right, 16)
+
+        [void]$languageFlagCanvas.Children.Add($left)
+        [void]$languageFlagCanvas.Children.Add($middle)
+        [void]$languageFlagCanvas.Children.Add($right)
+        return
+    }
+
+    # England flag: white field with centered red cross.
+    $bg = New-Object System.Windows.Shapes.Rectangle
+    $bg.Width = 24
+    $bg.Height = 16
+    $bg.Fill = [System.Windows.Media.Brushes]::White
+
+    $vCross = New-Object System.Windows.Shapes.Rectangle
+    $vCross.Width = 4
+    $vCross.Height = 16
+    $vCross.Fill = [System.Windows.Media.Brushes]::Crimson
+    [System.Windows.Controls.Canvas]::SetLeft($vCross, 10)
+
+    $hCross = New-Object System.Windows.Shapes.Rectangle
+    $hCross.Width = 24
+    $hCross.Height = 4
+    $hCross.Fill = [System.Windows.Media.Brushes]::Crimson
+    [System.Windows.Controls.Canvas]::SetTop($hCross, 6)
+
+    [void]$languageFlagCanvas.Children.Add($bg)
+    [void]$languageFlagCanvas.Children.Add($vCross)
+    [void]$languageFlagCanvas.Children.Add($hCross)
+}
 
 function Update-UiLanguage {
     $window.Title = Get-Text "appTitle"
@@ -422,10 +602,12 @@ function Update-UiLanguage {
     $convertButton.Content = Get-Text "convertButton"
 
     if ($script:CurrentLanguage -eq "it") {
-        $languageToggleButton.Content = "🇮🇹 EN"
+        Set-LanguageFlag -FlagCode "en"
+        $languageToggleText.Text = "EN"
     }
     else {
-        $languageToggleButton.Content = Get-Text "toggleButton"
+        Set-LanguageFlag -FlagCode "it"
+        $languageToggleText.Text = Get-Text "toggleButton"
     }
 
     switch ($script:CurrentStatus) {
@@ -496,6 +678,10 @@ $languageToggleButton.Add_Click({
     }
 
     Update-UiLanguage
+})
+
+$infoButton.Add_Click({
+    Show-InfoDialog -Owner $window
 })
 
 $dropZone.Add_MouseLeftButtonUp({
