@@ -2,7 +2,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# WinForms requires STA. Relaunch in STA if needed.
+# WPF requires STA. Relaunch in STA if needed.
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne [Threading.ApartmentState]::STA) {
     $scriptPath = $PSCommandPath
     if (-not $scriptPath) {
@@ -18,10 +18,87 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne [Threading.ApartmentSta
     exit
 }
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
 
 $script:LogDirectory = Join-Path $env:LOCALAPPDATA "QuickPDFA\logs"
+$script:CurrentLanguage = "en"
+$script:CurrentStatus = "checking"
+$script:SelectedPdf = $null
+$script:GhostscriptExe = $null
+
+$script:Translations = @{
+    en = @{
+        appTitle = "QuickPDFA"
+        titleLabel = "Drop a PDF, then click Convert"
+        dropLabel = "Drag and drop one PDF file here"
+        convertButton = "Convert to PDF/A"
+        toggleButton = "🇮🇹 IT / EN"
+        statusCheckingGhostscript = "Checking Ghostscript..."
+        statusGhostscriptFound = "Ghostscript found: {0}"
+        statusGhostscriptMissing = "Ghostscript not found. Install it, then relaunch this app."
+        statusReady = "Ready to convert."
+        statusConverting = "Converting..."
+        statusDone = "Done: {0}"
+        statusSaveCanceled = "Save canceled."
+        statusConversionFailed = "Conversion failed."
+        warningDropPdf = "Please drop or select a .pdf file."
+        dialogOpenTitle = "Open a file..."
+        dialogSaveTitle = "Save PDF/A As"
+        dialogSuccessBody = "PDF/A created successfully:`n{0}"
+        dialogGhostscriptMissing = "Ghostscript was not found."
+        dialogGhostscriptRequiredTitle = "QuickPDFA - Ghostscript Required"
+        promptOpenGhostscriptPage = "{0}`n`nWould you like to open the Ghostscript download page now?"
+    }
+    it = @{
+        appTitle = "QuickPDFA"
+        titleLabel = "Trascina un PDF, poi fai clic su Converti"
+        dropLabel = "Trascina qui un file PDF"
+        convertButton = "Converti in PDF/A"
+        toggleButton = "🇮🇹 IT / EN"
+        statusCheckingGhostscript = "Controllo di Ghostscript in corso..."
+        statusGhostscriptFound = "Ghostscript trovato: {0}"
+        statusGhostscriptMissing = "Ghostscript non trovato. Installalo e riavvia l'app."
+        statusReady = "Pronto per la conversione."
+        statusConverting = "Conversione in corso..."
+        statusDone = "Completato: {0}"
+        statusSaveCanceled = "Salvataggio annullato."
+        statusConversionFailed = "Conversione non riuscita."
+        warningDropPdf = "Seleziona o trascina un file .pdf."
+        dialogOpenTitle = "Apri file..."
+        dialogSaveTitle = "Salva PDF/A con nome"
+        dialogSuccessBody = "PDF/A creato con successo:`n{0}"
+        dialogGhostscriptMissing = "Ghostscript non e stato trovato."
+        dialogGhostscriptRequiredTitle = "QuickPDFA - Ghostscript Richiesto"
+        promptOpenGhostscriptPage = "{0}`n`nVuoi aprire ora la pagina di download di Ghostscript?"
+    }
+}
+
+function Get-Text {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Key,
+
+        [object[]]$Args
+    )
+
+    $table = $script:Translations[$script:CurrentLanguage]
+    if (-not $table) {
+        $table = $script:Translations["en"]
+    }
+
+    $text = $table[$Key]
+    if (-not $text) {
+        $text = $script:Translations["en"][$Key]
+    }
+
+    if ($Args -and $Args.Count -gt 0) {
+        return [string]::Format($text, $Args)
+    }
+
+    return $text
+}
 
 function Write-Log {
     param(
@@ -36,25 +113,6 @@ function Write-Log {
     $logFile = Join-Path $script:LogDirectory ("QuickPDFA_{0}.log" -f (Get-Date -Format "yyyyMMdd"))
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
     Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
-}
-
-function Prompt-InstallGhostscript {
-    param(
-        [string]$Reason = "Ghostscript is not installed or not available in PATH."
-    )
-
-    $downloadUrl = "https://ghostscript.com/releases/gsdnld.html"
-    $promptText = "$Reason`n`nWould you like to open the Ghostscript download page now?"
-    $answer = [System.Windows.Forms.MessageBox]::Show(
-        $promptText,
-        "QuickPDFA - Ghostscript Required",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-
-    if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-        Start-Process -FilePath $downloadUrl | Out-Null
-    }
 }
 
 function Find-Ghostscript {
@@ -92,6 +150,25 @@ function Find-Ghostscript {
     return $null
 }
 
+function Prompt-InstallGhostscript {
+    param(
+        [string]$Reason = "Ghostscript is not installed or not available in PATH."
+    )
+
+    $downloadUrl = "https://ghostscript.com/releases/gsdnld.html"
+    $promptText = Get-Text "promptOpenGhostscriptPage" @($Reason)
+    $answer = [System.Windows.MessageBox]::Show(
+        $promptText,
+        (Get-Text "dialogGhostscriptRequiredTitle"),
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+
+    if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+        Start-Process -FilePath $downloadUrl | Out-Null
+    }
+}
+
 function Convert-ToPdfA {
     param(
         [Parameter(Mandatory = $true)]
@@ -122,31 +199,31 @@ function Convert-ToPdfA {
 
     Write-Log ("Starting conversion. Input='{0}', Output='{1}', Ghostscript='{2}'" -f $InputPdf, $OutputPdf, $GhostscriptExe)
 
-        $gsRoot = Split-Path (Split-Path $GhostscriptExe -Parent) -Parent
-        $pdfaDefTemplate = Join-Path $gsRoot "lib\PDFA_def.ps"
-        $iccProfilePath = Join-Path $gsRoot "iccprofiles\srgb.icc"
+    $gsRoot = Split-Path (Split-Path $GhostscriptExe -Parent) -Parent
+    $pdfaDefTemplate = Join-Path $gsRoot "lib\PDFA_def.ps"
+    $iccProfilePath = Join-Path $gsRoot "iccprofiles\srgb.icc"
 
-        if (-not (Test-Path -LiteralPath $pdfaDefTemplate)) {
-            throw "Ghostscript PDFA definition file not found: $pdfaDefTemplate"
-        }
+    if (-not (Test-Path -LiteralPath $pdfaDefTemplate)) {
+        throw "Ghostscript PDFA definition file not found: $pdfaDefTemplate"
+    }
 
-        if (-not (Test-Path -LiteralPath $iccProfilePath)) {
-                throw "Ghostscript ICC profile not found: $iccProfilePath"
-        }
+    if (-not (Test-Path -LiteralPath $iccProfilePath)) {
+        throw "Ghostscript ICC profile not found: $iccProfilePath"
+    }
 
-        $iccProfileForPs = $iccProfilePath -replace "\\", "/"
-        $tempPdfaDef = Join-Path $env:TEMP ("QuickPDFA_PDFA_def_{0}.ps" -f [guid]::NewGuid().ToString("N"))
-        $pdfaDefContent = Get-Content -LiteralPath $pdfaDefTemplate -Raw
-        $pdfaDefContent = [Regex]::Replace(
-            $pdfaDefContent,
-            "/ICCProfile\s+\([^\)]*\)\s*%\s*Customise",
-            "/ICCProfile ($iccProfileForPs) % Customise"
-        )
+    $iccProfileForPs = $iccProfilePath -replace "\\", "/"
+    $tempPdfaDef = Join-Path $env:TEMP ("QuickPDFA_PDFA_def_{0}.ps" -f [guid]::NewGuid().ToString("N"))
+    $pdfaDefContent = Get-Content -LiteralPath $pdfaDefTemplate -Raw
+    $pdfaDefContent = [Regex]::Replace(
+        $pdfaDefContent,
+        "/ICCProfile\s+\([^\)]*\)\s*%\s*Customise",
+        "/ICCProfile ($iccProfileForPs) % Customise"
+    )
 
-        Set-Content -LiteralPath $tempPdfaDef -Value $pdfaDefContent -Encoding ASCII
-        Write-Log ("Using PDFA template '{0}'" -f $pdfaDefTemplate)
-        Write-Log ("Using ICC profile '{0}'" -f $iccProfilePath)
-        Write-Log ("Using temp PDFA definition '{0}'" -f $tempPdfaDef)
+    Set-Content -LiteralPath $tempPdfaDef -Value $pdfaDefContent -Encoding ASCII
+    Write-Log ("Using PDFA template '{0}'" -f $pdfaDefTemplate)
+    Write-Log ("Using ICC profile '{0}'" -f $iccProfilePath)
+    Write-Log ("Using temp PDFA definition '{0}'" -f $tempPdfaDef)
 
     $args = @(
         "-dPDFA=2",
@@ -225,65 +302,148 @@ function Convert-ToPdfA {
     return $outputPdf
 }
 
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "QuickPDFA"
-$form.StartPosition = "CenterScreen"
-$form.Size = New-Object System.Drawing.Size(640, 320)
-$form.MinimumSize = New-Object System.Drawing.Size(640, 320)
-$form.MaximizeBox = $false
+[xml]$xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="720" Height="390" MinWidth="720" MinHeight="390"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        Background="#F4F7FB"
+        FontFamily="Segoe UI"
+        Title="QuickPDFA">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="18" />
+            <RowDefinition Height="120" />
+            <RowDefinition Height="16" />
+            <RowDefinition Height="34" />
+            <RowDefinition Height="20" />
+            <RowDefinition Height="42" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-$titleLabel = New-Object System.Windows.Forms.Label
-$titleLabel.Text = "Drop a PDF, then click Convert"
-$titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
-$titleLabel.AutoSize = $true
-$titleLabel.Location = New-Object System.Drawing.Point(16, 14)
-$form.Controls.Add($titleLabel)
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="TitleText"
+                       Grid.Column="0"
+                       FontSize="24"
+                       FontWeight="SemiBold"
+                       Foreground="#0B1F3A"
+                       VerticalAlignment="Center" />
+            <Button x:Name="LanguageToggleButton"
+                    Grid.Column="1"
+                    Width="188"
+                    Height="34"
+                    HorizontalAlignment="Right"
+                    FontSize="14"
+                    FontFamily="Segoe UI Emoji"
+                    Background="#FFFFFF"
+                    BorderBrush="#D4DCE8"
+                    Foreground="#0B1F3A"
+                    Cursor="Hand" />
+        </Grid>
 
-$dropPanel = New-Object System.Windows.Forms.Panel
-$dropPanel.Location = New-Object System.Drawing.Point(16, 52)
-$dropPanel.Size = New-Object System.Drawing.Size(592, 110)
-$dropPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-$dropPanel.BackColor = [System.Drawing.Color]::FromArgb(245, 248, 252)
-$dropPanel.AllowDrop = $true
-$form.Controls.Add($dropPanel)
+        <Border x:Name="DropZone"
+                Grid.Row="2"
+                CornerRadius="14"
+                BorderBrush="#BFCDE2"
+                BorderThickness="1.6"
+                Background="#EAF2FF"
+                AllowDrop="True"
+                Cursor="Hand">
+            <Grid>
+                <TextBlock x:Name="DropText"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontSize="17"
+                           FontWeight="SemiBold"
+                           Foreground="#1E3A5F" />
+            </Grid>
+        </Border>
 
-$dropLabel = New-Object System.Windows.Forms.Label
-$dropLabel.Text = "Drag and drop one PDF file here"
-$dropLabel.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-$dropLabel.AutoSize = $true
-$dropLabel.Location = New-Object System.Drawing.Point(170, 42)
-$dropPanel.Controls.Add($dropLabel)
+        <TextBox x:Name="InputBox"
+                 Grid.Row="4"
+                 Height="34"
+                 IsReadOnly="True"
+                 FontSize="13"
+                 VerticalContentAlignment="Center"
+                 Padding="10,0"
+                 BorderBrush="#C4D1E3"
+                 Background="#FFFFFF" />
 
-$inputBox = New-Object System.Windows.Forms.TextBox
-$inputBox.Location = New-Object System.Drawing.Point(16, 178)
-$inputBox.Size = New-Object System.Drawing.Size(592, 24)
-$inputBox.ReadOnly = $true
-$form.Controls.Add($inputBox)
+        <Grid Grid.Row="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" />
+                <ColumnDefinition Width="14" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-$convertButton = New-Object System.Windows.Forms.Button
-$convertButton.Text = "Convert to PDF/A"
-$convertButton.Location = New-Object System.Drawing.Point(16, 214)
-$convertButton.Size = New-Object System.Drawing.Size(180, 34)
-$convertButton.Enabled = $false
-$form.Controls.Add($convertButton)
+            <Button x:Name="ConvertButton"
+                    Grid.Column="0"
+                    Height="42"
+                    FontSize="15"
+                    FontWeight="SemiBold"
+                    Cursor="Hand"
+                    Background="#1E6FD9"
+                    Foreground="#FFFFFF"
+                    BorderBrush="#1E6FD9"
+                    IsEnabled="False" />
 
-$statusLabel = New-Object System.Windows.Forms.Label
-$statusLabel.Text = "Checking Ghostscript..."
-$statusLabel.AutoSize = $true
-$statusLabel.Location = New-Object System.Drawing.Point(214, 223)
-$form.Controls.Add($statusLabel)
+            <TextBlock x:Name="StatusText"
+                       Grid.Column="2"
+                       VerticalAlignment="Center"
+                       FontSize="13"
+                       TextWrapping="Wrap"
+                       Foreground="#27486E" />
+        </Grid>
+    </Grid>
+</Window>
+"@
 
-$selectedPdf = $null
-$ghostscriptExe = Find-Ghostscript
+$reader = New-Object System.Xml.XmlNodeReader $xaml
+$window = [Windows.Markup.XamlReader]::Load($reader)
 
-if ($ghostscriptExe) {
-    $statusLabel.Text = "Ghostscript found: $ghostscriptExe"
-    Write-Log ("Ghostscript detected at '{0}'" -f $ghostscriptExe)
-}
-else {
-    $statusLabel.Text = "Ghostscript not found. Install it, then relaunch this app."
-    Write-Log "Ghostscript not found during startup."
-    Prompt-InstallGhostscript
+$titleText = $window.FindName("TitleText")
+$languageToggleButton = $window.FindName("LanguageToggleButton")
+$dropZone = $window.FindName("DropZone")
+$dropText = $window.FindName("DropText")
+$inputBox = $window.FindName("InputBox")
+$convertButton = $window.FindName("ConvertButton")
+$statusText = $window.FindName("StatusText")
+
+function Update-UiLanguage {
+    $window.Title = Get-Text "appTitle"
+    $titleText.Text = Get-Text "titleLabel"
+    $dropText.Text = Get-Text "dropLabel"
+    $convertButton.Content = Get-Text "convertButton"
+
+    if ($script:CurrentLanguage -eq "it") {
+        $languageToggleButton.Content = "🇮🇹 EN"
+    }
+    else {
+        $languageToggleButton.Content = Get-Text "toggleButton"
+    }
+
+    switch ($script:CurrentStatus) {
+        "checking" { $statusText.Text = Get-Text "statusCheckingGhostscript" }
+        "ghostscriptMissing" { $statusText.Text = Get-Text "statusGhostscriptMissing" }
+        "ready" { $statusText.Text = Get-Text "statusReady" }
+        "converting" { $statusText.Text = Get-Text "statusConverting" }
+        "saveCanceled" { $statusText.Text = Get-Text "statusSaveCanceled" }
+        "conversionFailed" { $statusText.Text = Get-Text "statusConversionFailed" }
+        default {
+            if ($script:GhostscriptExe) {
+                $statusText.Text = Get-Text "statusGhostscriptFound" @($script:GhostscriptExe)
+            }
+            else {
+                $statusText.Text = Get-Text "statusGhostscriptMissing"
+            }
+        }
+    }
 }
 
 $setSelectedFile = {
@@ -294,30 +454,31 @@ $setSelectedFile = {
     }
 
     if (([IO.Path]::GetExtension($path)).ToLowerInvariant() -ne ".pdf") {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Please drop a .pdf file.",
-            "QuickPDFA",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
+        [System.Windows.MessageBox]::Show(
+            (Get-Text "warningDropPdf"),
+            (Get-Text "appTitle"),
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Warning
         ) | Out-Null
         return
     }
 
-    $script:selectedPdf = $path
+    $script:SelectedPdf = $path
     $inputBox.Text = $path
-    $convertButton.Enabled = [bool]($script:selectedPdf -and $script:ghostscriptExe)
-    $statusLabel.Text = "Ready to convert."
+    $convertButton.IsEnabled = [bool]($script:SelectedPdf -and $script:GhostscriptExe)
+    $script:CurrentStatus = "ready"
+    $statusText.Text = Get-Text "statusReady"
 }
 
 $openFilePicker = {
-    $openDialog = New-Object System.Windows.Forms.OpenFileDialog
-    $openDialog.Title = "Open a file..."
+    $openDialog = New-Object Microsoft.Win32.OpenFileDialog
+    $openDialog.Title = Get-Text "dialogOpenTitle"
     $openDialog.Filter = "PDF files (*.pdf)|*.pdf"
     $openDialog.DefaultExt = "pdf"
     $openDialog.CheckFileExists = $true
     $openDialog.Multiselect = $false
 
-    if ($openDialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+    if ($openDialog.ShowDialog() -eq $true) {
         Write-Log ("File selected from Open dialog: {0}" -f $openDialog.FileName)
         & $setSelectedFile $openDialog.FileName
     }
@@ -326,64 +487,76 @@ $openFilePicker = {
     }
 }
 
-$dropLabel.Cursor = [System.Windows.Forms.Cursors]::Hand
-$dropLabel.Add_Click({
+$languageToggleButton.Add_Click({
+    if ($script:CurrentLanguage -eq "it") {
+        $script:CurrentLanguage = "en"
+    }
+    else {
+        $script:CurrentLanguage = "it"
+    }
+
+    Update-UiLanguage
+})
+
+$dropZone.Add_MouseLeftButtonUp({
     & $openFilePicker
 })
 
-$dropPanel.Add_Click({
+$dropText.Add_MouseLeftButtonUp({
     & $openFilePicker
 })
 
-$dropPanel.Add_DragEnter({
-    if ($_.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
-        $files = [string[]]$_.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop)
+$dropZone.Add_DragEnter({
+    if ($_.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $files = [string[]]$_.Data.GetData([System.Windows.DataFormats]::FileDrop)
         if ($files.Count -eq 1 -and ([IO.Path]::GetExtension($files[0]).ToLowerInvariant() -eq ".pdf")) {
-            $_.Effect = [System.Windows.Forms.DragDropEffects]::Copy
-            $dropPanel.BackColor = [System.Drawing.Color]::FromArgb(232, 242, 255)
+            $_.Effects = [System.Windows.DragDropEffects]::Copy
+            $dropZone.Background = [System.Windows.Media.Brushes]::LightCyan
         }
         else {
-            $_.Effect = [System.Windows.Forms.DragDropEffects]::None
+            $_.Effects = [System.Windows.DragDropEffects]::None
         }
     }
     else {
-        $_.Effect = [System.Windows.Forms.DragDropEffects]::None
+        $_.Effects = [System.Windows.DragDropEffects]::None
     }
+    $_.Handled = $true
 })
 
-$dropPanel.Add_DragLeave({
-    $dropPanel.BackColor = [System.Drawing.Color]::FromArgb(245, 248, 252)
+$dropZone.Add_DragLeave({
+    $dropZone.Background = [System.Windows.Media.Brushes]::AliceBlue
 })
 
-$dropPanel.Add_DragDrop({
-    $dropPanel.BackColor = [System.Drawing.Color]::FromArgb(245, 248, 252)
-    $files = [string[]]$_.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop)
+$dropZone.Add_Drop({
+    $dropZone.Background = [System.Windows.Media.Brushes]::AliceBlue
+    $files = [string[]]$_.Data.GetData([System.Windows.DataFormats]::FileDrop)
     if ($files.Count -ge 1) {
         & $setSelectedFile $files[0]
     }
+    $_.Handled = $true
 })
 
 $convertButton.Add_Click({
-    if (-not $selectedPdf) {
+    if (-not $script:SelectedPdf) {
         return
     }
 
-    if (-not $ghostscriptExe) {
+    if (-not $script:GhostscriptExe) {
         Write-Log "Convert blocked: Ghostscript not found."
         Prompt-InstallGhostscript
-        [System.Windows.Forms.MessageBox]::Show(
-            "Ghostscript was not found.",
-            "QuickPDFA",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
+        [System.Windows.MessageBox]::Show(
+            (Get-Text "dialogGhostscriptMissing"),
+            (Get-Text "appTitle"),
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Error
         ) | Out-Null
         return
     }
 
-    $defaultFolder = Split-Path -Path $selectedPdf -Parent
-    $defaultName = [IO.Path]::GetFileNameWithoutExtension($selectedPdf)
-    $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
-    $saveDialog.Title = "Save PDF/A As"
+    $defaultFolder = Split-Path -Path $script:SelectedPdf -Parent
+    $defaultName = [IO.Path]::GetFileNameWithoutExtension($script:SelectedPdf)
+    $saveDialog = New-Object Microsoft.Win32.SaveFileDialog
+    $saveDialog.Title = Get-Text "dialogSaveTitle"
     $saveDialog.Filter = "PDF files (*.pdf)|*.pdf"
     $saveDialog.DefaultExt = "pdf"
     $saveDialog.AddExtension = $true
@@ -391,8 +564,9 @@ $convertButton.Add_Click({
     $saveDialog.InitialDirectory = $defaultFolder
     $saveDialog.FileName = ("{0}_PDFA.pdf" -f $defaultName)
 
-    if ($saveDialog.ShowDialog($form) -ne [System.Windows.Forms.DialogResult]::OK) {
-        $statusLabel.Text = "Save canceled."
+    if ($saveDialog.ShowDialog() -ne $true) {
+        $script:CurrentStatus = "saveCanceled"
+        $statusText.Text = Get-Text "statusSaveCanceled"
         Write-Log "Save dialog canceled by user."
         return
     }
@@ -400,34 +574,51 @@ $convertButton.Add_Click({
     $outputPdf = $saveDialog.FileName
 
     try {
-        $convertButton.Enabled = $false
-        $form.UseWaitCursor = $true
-        $statusLabel.Text = "Converting..."
-        $form.Refresh()
+        $convertButton.IsEnabled = $false
+        [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
+        $script:CurrentStatus = "converting"
+        $statusText.Text = Get-Text "statusConverting"
 
-        $result = Convert-ToPdfA -InputPdf $selectedPdf -OutputPdf $outputPdf -GhostscriptExe $ghostscriptExe
+        $result = Convert-ToPdfA -InputPdf $script:SelectedPdf -OutputPdf $outputPdf -GhostscriptExe $script:GhostscriptExe
 
-        $statusLabel.Text = "Done: $result"
-        [System.Windows.Forms.MessageBox]::Show(
-            "PDF/A created successfully:`n$result",
-            "QuickPDFA",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
+        $script:CurrentStatus = "done"
+        $statusText.Text = Get-Text "statusDone" @($result)
+        [System.Windows.MessageBox]::Show(
+            (Get-Text "dialogSuccessBody" @($result)),
+            (Get-Text "appTitle"),
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Information
         ) | Out-Null
     }
     catch {
-        $statusLabel.Text = "Conversion failed."
-        [System.Windows.Forms.MessageBox]::Show(
+        $script:CurrentStatus = "conversionFailed"
+        $statusText.Text = Get-Text "statusConversionFailed"
+        [System.Windows.MessageBox]::Show(
             $_.Exception.Message,
-            "QuickPDFA",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
+            (Get-Text "appTitle"),
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Error
         ) | Out-Null
     }
     finally {
-        $form.UseWaitCursor = $false
-        $convertButton.Enabled = [bool]($selectedPdf -and $ghostscriptExe)
+        [System.Windows.Input.Mouse]::OverrideCursor = $null
+        $convertButton.IsEnabled = [bool]($script:SelectedPdf -and $script:GhostscriptExe)
     }
 })
 
-[void]$form.ShowDialog()
+Update-UiLanguage
+$script:GhostscriptExe = Find-Ghostscript
+
+if ($script:GhostscriptExe) {
+    $script:CurrentStatus = "ghostscriptFound"
+    $statusText.Text = Get-Text "statusGhostscriptFound" @($script:GhostscriptExe)
+    Write-Log ("Ghostscript detected at '{0}'" -f $script:GhostscriptExe)
+}
+else {
+    $script:CurrentStatus = "ghostscriptMissing"
+    $statusText.Text = Get-Text "statusGhostscriptMissing"
+    Write-Log "Ghostscript not found during startup."
+    Prompt-InstallGhostscript
+}
+
+[void]$window.ShowDialog()
